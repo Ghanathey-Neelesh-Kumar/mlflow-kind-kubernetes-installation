@@ -1,13 +1,13 @@
--- Connect to the default PostgreSQL database as the RDS master/admin user.
--- Replace the placeholder with a strong password. Do not commit real secrets.
+-- Connect to the default PostgreSQL database on your RDS instance
+-- as the RDS master user before running these commands.
+-- Replace the password with your own value.
 
 CREATE DATABASE mlflow;
 
-CREATE USER mlflow_user WITH PASSWORD '<REPLACE_WITH_STRONG_PASSWORD>';
+CREATE USER mlflow_user WITH PASSWORD '<YOUR_MLFLOW_PASSWORD>';
 
 GRANT ALL PRIVILEGES ON DATABASE mlflow TO mlflow_user;
 
--- Switch to the database before granting schema permissions.
 \connect mlflow
 
 GRANT ALL PRIVILEGES ON SCHEMA public TO mlflow_user;
