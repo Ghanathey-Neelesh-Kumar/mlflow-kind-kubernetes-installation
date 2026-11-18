@@ -1,204 +1,121 @@
-# Install MLflow on a kind Kubernetes Cluster with Helm and Amazon RDS PostgreSQL
+# Install MLflow on a kind Kubernetes Cluster using Helm
 
-This repository accompanies the YouTube walkthrough demonstrating how to run the **MLflow Tracking Server inside a local kind Kubernetes cluster** while using **Amazon RDS for PostgreSQL as the external backend store**.
+This repository contains the notes and configuration used in the YouTube video demonstrating how to install **MLflow on a local kind Kubernetes cluster** and connect it to an **Amazon RDS PostgreSQL database**.
 
-The walkthrough uses the community-maintained `community-charts/mlflow` Helm chart.
+The aim is to help you repeat the same installation shown in the video. Follow the steps in order.
 
-> **Scope:** The implementation covered here configures PostgreSQL as MLflow's backend store for tracking metadata. It does **not** configure Amazon S3 as the artifact store. Do not assume this lab provides durable, shared artifact storage. See [Architecture and scope](docs/architecture.md).
->
-> **Learning lab, not a production blueprint:** kind runs locally on your workstation. Any public RDS access used for a laptop-to-RDS demonstration must be temporary and tightly restricted. A production deployment needs private network connectivity, managed secrets, TLS, authentication, monitoring, backups and tested recovery procedures.
+## What we will do
 
-## What you will build
+1. Create an Amazon RDS PostgreSQL database.
+2. Connect to PostgreSQL and create a dedicated `mlflow` database and `mlflow_user`.
+3. Create a local Kubernetes cluster using kind.
+4. Install MLflow in the cluster using the Community Charts Helm chart.
+5. Connect to the MLflow UI using `kubectl port-forward`.
 
-```text
-Browser / MLflow client
-        |
-        | http://localhost:7004
-        v
-kubectl port-forward
-        |
-        v
-kind Kubernetes cluster
-        |
-        v
-MLflow Tracking Server Pod :5000
-        |
-        | PostgreSQL TCP :5432
-        v
-Amazon RDS for PostgreSQL
-        |
-        +-- experiments
-        +-- runs
-        +-- parameters
-        +-- metrics
-        +-- tags
-```
+## Prerequisites
 
-## Repository contents
+Install the following tools:
 
-```text
-mlflow-kind-kubernetes-installation/
-├── README.md
-├── .gitignore
-├── docs/
-│   ├── architecture.md
-│   ├── links-and-versions.md
-│   ├── security-and-cleanup.md
-│   └── troubleshooting.md
-├── sql/
-│   └── 01-create-mlflow-database.sql
-└── values/
-    └── mlflow-values.example.yaml
-```
-
-## 1. Prerequisites
-
-Install and verify:
-
-- Docker Desktop (or Docker Engine) running
+- Docker Desktop or Docker Engine
 - kind
 - kubectl
 - Helm 3
-- Git
-- An AWS account with permission to create/manage an RDS PostgreSQL instance
-- A `psql` client compatible with your PostgreSQL server
+- PostgreSQL client (`psql`)
+- An AWS account for the RDS PostgreSQL instance
 
-Check your installations:
+Check that the tools are available:
 
 ```bash
 docker version
 kind version
 kubectl version --client
 helm version
-git --version
 psql --version
 ```
 
-Useful installation links are listed in [docs/links-and-versions.md](docs/links-and-versions.md).
+Installation links are listed at the end of this README.
 
-## 2. Create the PostgreSQL database in Amazon RDS
-
-The walkthrough uses Amazon RDS for PostgreSQL as the external MLflow backend store.
+## Step 1: Create an Amazon RDS PostgreSQL instance
 
 In the AWS Console:
 
 1. Open **RDS → Databases → Create database**.
-2. Select **PostgreSQL**.
-3. Choose a development configuration appropriate for your account and budget.
-4. Give the DB instance a name, for example `mlflow-postgres-demo`.
-5. Set and securely store the master password.
-6. Record the endpoint, port and AWS Region after the instance becomes available.
+2. Choose **PostgreSQL**.
+3. Select **Easy create**.
+4. Choose a small sandbox/development instance for this learning demonstration.
+5. Enter a unique DB instance identifier.
+6. Set a master password and keep it available for the next step.
+7. Create the database and wait until its status is **Available**.
 
-The default PostgreSQL port is `5432`.
+Open the database details and copy its endpoint. The default PostgreSQL port is `5432`.
 
-### Network access for a local kind lab
+### Allow your local machine to connect
 
-Your kind cluster runs on your workstation, so the MLflow Pod needs network connectivity to the RDS endpoint.
+The kind cluster runs on your local machine, outside the AWS VPC. For this demonstration, the RDS instance must be reachable from your machine.
 
-If your particular local lab requires RDS public accessibility, restrict the RDS security group's inbound rule to your current public IP address only:
+If you enable public accessibility, also update the RDS security group's inbound rules to allow PostgreSQL TCP port `5432` from **your current public IP address only** (a `/32` source). Do not allow access from `0.0.0.0/0`.
 
-| Setting | Value |
-|---|---|
-| Type | PostgreSQL |
-| Protocol | TCP |
-| Port | 5432 |
-| Source | `YOUR_PUBLIC_IP/32` |
+If your environment already provides private connectivity to RDS, use that instead.
 
-Never open the database to `0.0.0.0/0`. Public accessibility alone does not guarantee connectivity; subnet routing, network ACLs, security groups and database status must also permit the connection.
+## Step 2: Create the MLflow database and user
 
-For EKS or another production cluster, prefer private RDS connectivity inside the VPC. See [Security and cleanup](docs/security-and-cleanup.md).
-
-### Connect with psql
-
-Replace the endpoint placeholder:
+Use the PostgreSQL client to connect to the RDS instance. Replace the endpoint and master username with your own values:
 
 ```bash
-psql -h <RDS_ENDPOINT> -p 5432 -U your_rds_master_username -d postgres
+psql -h <RDS_ENDPOINT> -p 5432 -U <RDS_MASTER_USERNAME> -d postgres
 ```
 
-Replace `your_rds_master_username` with the master username you selected when creating the RDS instance. Enter the master password when prompted. Avoid placing passwords directly in shell commands or command history.
+Enter the RDS master password when prompted.
 
-### Create a dedicated database and application user
+At the PostgreSQL prompt, create a separate database and user for MLflow:
 
-Run the SQL statements in [sql/01-create-mlflow-database.sql](sql/01-create-mlflow-database.sql). Replace the password placeholder with a strong password that you store securely.
+```sql
+CREATE DATABASE mlflow;
 
-The script creates:
+CREATE USER mlflow_user WITH PASSWORD 'YOUR_MLFLOW_PASSWORD';
 
-- Database: `mlflow`
-- Application user: `mlflow_user`
-- Database and `public` schema permissions for the application user
+GRANT ALL PRIVILEGES ON DATABASE mlflow TO mlflow_user;
 
-Use the dedicated `mlflow_user` account for the MLflow application. Do not configure the application to use the RDS master account.
+\connect mlflow
 
-## 3. Create the kind cluster
+GRANT ALL PRIVILEGES ON SCHEMA public TO mlflow_user;
+```
 
-The course demonstration uses the cluster name `production-mlflow-setup`:
+You can also find these commands in [sql/01-create-mlflow-database.sql](sql/01-create-mlflow-database.sql). Replace the password placeholder before running the script.
+
+## Step 3: Create the kind Kubernetes cluster
+
+Create the cluster using the same name as the video:
 
 ```bash
 kind create cluster --name production-mlflow-setup
 ```
 
-Verify the cluster:
+Check that the cluster and node are ready:
 
 ```bash
 kind get clusters
-kubectl cluster-info --context kind-production-mlflow-setup
 kubectl get nodes
+kubectl cluster-info --context kind-production-mlflow-setup
 ```
 
-Wait until the kind node reports `Ready` before continuing.
+## Step 4: Add the MLflow Helm chart repository
 
-## 4. Add the Community Charts Helm repository
-
-The walkthrough uses the MLflow chart published by the Community Charts project.
+This demonstration uses the Community Charts MLflow Helm chart.
 
 ```bash
 helm repo add community-charts https://community-charts.github.io/helm-charts
 helm repo update
+helm search repo community-charts/mlflow
 ```
 
-Verify the repository and inspect the MLflow chart:
-
-```bash
-helm repo list
-helm search repo community-charts/mlflow --versions
-helm show chart community-charts/mlflow
-helm show values community-charts/mlflow
-```
-
-The Helm chart version and MLflow application version are different version numbers. Check the chart metadata before installation. For repeatable deployments, select and pin a chart version that you have tested; do not assume that the latest chart will behave exactly like the version used in the recording.
-
-## 5. Create the `mlflow` namespace
+## Step 5: Create the MLflow namespace
 
 ```bash
 kubectl create namespace mlflow
-kubectl get namespace mlflow
 ```
 
-If the namespace already exists, continue without recreating it.
-
-## 6. Create a Kubernetes Secret for the database credentials
-
-Do not commit database credentials to GitHub or put real passwords in the example values file.
-
-Create a Secret in the same namespace as the MLflow Helm release:
-
-```bash
-kubectl create secret generic mlflow-db-secret \
-  --namespace mlflow \
-  --from-literal=username=mlflow_user \
-  --from-literal=password='<YOUR_MLFLOW_DB_PASSWORD>'
-```
-
-Verify only that the Secret exists:
-
-```bash
-kubectl get secret mlflow-db-secret -n mlflow
-```
-
-Do not print or decode the Secret during the recording. For production, use a managed secret solution such as External Secrets Operator with AWS Secrets Manager or another approved secrets platform.
-
-## 7. Configure the Helm values file
+## Step 6: Configure the RDS connection
 
 Copy the example values file:
 
@@ -206,23 +123,18 @@ Copy the example values file:
 cp values/mlflow-values.example.yaml values/mlflow-values.yaml
 ```
 
-Edit `values/mlflow-values.yaml` and replace `<RDS_ENDPOINT>` with your RDS PostgreSQL endpoint.
+Open `values/mlflow-values.yaml` and replace:
 
-The values file configures:
+- `<RDS_ENDPOINT>` with your RDS endpoint.
+- `<YOUR_MLFLOW_PASSWORD>` with the password you assigned to `mlflow_user`.
 
-- PostgreSQL as the external backend store
-- The MLflow database name and endpoint
-- Database schema migration
-- A database connection-check init container
-- The existing Kubernetes Secret containing the database username and password
+The configuration enables the PostgreSQL backend, database migration and the database connection check.
 
-The `databaseConnectionCheck` setting adds a database availability check before the main tracking server starts. The `databaseMigration` setting enables the chart's database migration step.
+**Do not commit your completed `values/mlflow-values.yaml` file or real database password to GitHub.** The repository's `.gitignore` excludes that local file.
 
-The real `values/mlflow-values.yaml` file is excluded by `.gitignore`. Commit only the example file, never a file containing credentials.
+## Step 7: Install MLflow using Helm
 
-## 8. Install MLflow with Helm
-
-Install the release:
+Run:
 
 ```bash
 helm install mlflow community-charts/mlflow \
@@ -237,117 +149,73 @@ helm list -n mlflow
 helm status mlflow -n mlflow
 ```
 
-Helm should report the release as `deployed` when installation has completed successfully.
+## Step 8: Verify the MLflow Pod
 
-## 9. Verify Kubernetes resources and database connectivity
-
-Watch the Pod:
+Watch the Pod until it becomes ready:
 
 ```bash
 kubectl get pods -n mlflow -w
 ```
 
-In another terminal, inspect the resources:
+The chart runs an init container to check the PostgreSQL connection before the MLflow server starts. Once the init container completes and the MLflow container is ready, check the Pod:
 
 ```bash
-kubectl get pods,svc,deployments -n mlflow
-kubectl get events -n mlflow --sort-by=.metadata.creationTimestamp
+kubectl get pods -n mlflow
 ```
 
-The MLflow Pod may run init containers for the database connection check and schema migration before the main container starts. If the Pod does not become ready, inspect it:
+If the Pod does not start, inspect its details and logs:
 
 ```bash
 kubectl describe pod <MLFLOW_POD_NAME> -n mlflow
 kubectl logs <MLFLOW_POD_NAME> -n mlflow --all-containers=true
 ```
 
-The init containers should complete successfully and the MLflow application container should become ready.
+## Step 9: Open the MLflow UI
 
-## 10. Access the MLflow UI with port-forwarding
-
-Find the MLflow Pod:
+Get the MLflow Pod name:
 
 ```bash
 kubectl get pods -n mlflow
 ```
 
-Forward local port `7004` to container port `5000`:
+Forward local port `7004` to the MLflow server port `5000`:
 
 ```bash
 kubectl port-forward -n mlflow pod/<MLFLOW_POD_NAME> 7004:5000
 ```
 
-Keep this terminal open. Open the following address in your browser:
+Keep the port-forward terminal running and open this URL in your browser:
 
-```text
-http://localhost:7004
-```
+**http://localhost:7004**
 
-The port-forward is temporary. Stopping the command closes the tunnel; it does not stop the MLflow Pod or delete the database.
+You should now see the MLflow UI running from your kind Kubernetes cluster.
 
-You can inspect the Service name and port with:
+## Step 10: Clean up after the demonstration
 
-```bash
-kubectl get svc -n mlflow
-```
+Stop the port-forward with `Ctrl+C`.
 
-If you forward the Service instead of the Pod, use the Service port shown by that command. Do not assume the Service port is the same as the container port.
-
-## 11. Verify metadata persistence
-
-1. Open the MLflow UI.
-2. Create a test experiment, for example `kind-rds-persistence-check`.
-3. Confirm that the experiment appears in the UI.
-4. In a separate terminal, identify the MLflow Pod and delete only that Pod:
-
-```bash
-kubectl get pods -n mlflow
-kubectl delete pod <MLFLOW_POD_NAME> -n mlflow
-kubectl get pods -n mlflow -w
-```
-
-5. Wait for the Deployment to create a replacement Pod and for it to become ready.
-6. Restart the port-forward if necessary and refresh the MLflow UI.
-7. Confirm that the experiment is still present.
-
-This demonstrates that MLflow tracking metadata is stored in the external PostgreSQL database rather than only in the MLflow Pod's writable container filesystem.
-
-> This test proves metadata persistence across replacement of the MLflow Pod. It does not prove that artifact files are stored in S3, or that the overall deployment has high availability or disaster recovery.
-
-## 12. Cleanup
-
-Stop port-forwarding with `Ctrl+C`.
-
-Uninstall the Helm release:
+Remove the Helm release and local cluster when you have finished:
 
 ```bash
 helm uninstall mlflow -n mlflow
-```
-
-Delete the namespace if it is no longer needed:
-
-```bash
 kubectl delete namespace mlflow
-```
-
-Delete the local kind cluster:
-
-```bash
 kind delete cluster --name production-mlflow-setup
 ```
 
-Delete the RDS instance and temporary AWS resources only when you are certain they are no longer required. Check snapshots and backups before deletion, and review AWS billing afterwards.
+Also delete the RDS instance in the AWS Console if you no longer need it. Remember that AWS RDS can continue to incur charges even after the local kind cluster has been deleted.
 
-## 13. Troubleshooting
+## Important note about this demonstration
 
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues involving RDS connectivity, PostgreSQL permissions, init containers, Pod readiness, Helm releases and port-forwarding.
+The video configures Amazon RDS PostgreSQL as the **MLflow backend store** for tracking metadata. It does not configure Amazon S3 as an artifact store.
 
 ## Useful links
 
 - [Community Charts Helm repository](https://community-charts.github.io/helm-charts)
-- [Community Charts GitHub repository](https://github.com/community-charts/helm-charts)
-- [MLflow chart documentation — PostgreSQL backend](https://community-charts.github.io/docs/charts/mlflow/postgresql-backend-installation)
-- [Official MLflow project](https://github.com/mlflow/mlflow)
-- [Official MLflow documentation](https://mlflow.org/docs/latest/)
-
-See [docs/links-and-versions.md](docs/links-and-versions.md) for the complete reference list and the distinction between the Community Charts chart used here and the official MLflow Helm chart.
+- [Community Charts source code](https://github.com/community-charts/helm-charts)
+- [Community Charts MLflow documentation](https://community-charts.github.io/docs/charts/mlflow)
+- [MLflow documentation](https://mlflow.org/docs/latest/)
+- [kind documentation](https://kind.sigs.k8s.io/)
+- [Kubernetes documentation](https://kubernetes.io/docs/)
+- [Helm documentation](https://helm.sh/docs/)
+- [Amazon RDS for PostgreSQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html)
+- [PostgreSQL client (psql)](https://www.postgresql.org/docs/current/app-psql.html)
