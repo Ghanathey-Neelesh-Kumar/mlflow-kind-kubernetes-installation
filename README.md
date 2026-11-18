@@ -113,10 +113,10 @@ For EKS or another production cluster, prefer private RDS connectivity inside th
 Replace the endpoint placeholder:
 
 ```bash
-psql -h <RDS_ENDPOINT> -p 5432 -U postgres -d postgres
+psql -h <RDS_ENDPOINT> -p 5432 -U your_rds_master_username -d postgres
 ```
 
-Enter the master password when prompted. Avoid placing passwords directly in shell commands or command history.
+Replace `your_rds_master_username` with the master username you selected when creating the RDS instance. Enter the master password when prompted. Avoid placing passwords directly in shell commands or command history.
 
 ### Create a dedicated database and application user
 
