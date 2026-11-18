@@ -1,0 +1,12 @@
+# Local values and credentials
+values/mlflow-values.yaml
+*.secret.yaml
+.env
+.env.*
+!.env.example
+
+# Local tooling and generated files
+.DS_Store
+.vscode/
+.idea/
+*.log
