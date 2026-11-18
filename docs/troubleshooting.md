@@ -1,35 +1,33 @@
-# Quick checks if the installation does not work
+# Basic installation checks
 
 ## Check the kind cluster
 
 ```bash
 kind get clusters
 kubectl get nodes
-kubectl config current-context
 ```
 
-## Check the MLflow namespace and Pod
+## Check MLflow
 
 ```bash
-kubectl get all -n mlflow
-kubectl get pods -n mlflow -w
-kubectl describe pod <MLFLOW_POD_NAME> -n mlflow
-kubectl logs <MLFLOW_POD_NAME> -n mlflow --all-containers=true
-```
-
-## If the PostgreSQL connection check fails
-
-Check the RDS endpoint, port (`5432`), database name (`mlflow`), username and password in your local values file.
-
-Also check that the RDS security group permits your current public IP address on TCP port 5432. Do not open PostgreSQL to `0.0.0.0/0`.
-
-## If the MLflow UI does not open
-
-Confirm that the MLflow Pod is ready and that the port-forward command is still running:
-
-```bash
+helm list -n mlflow
 kubectl get pods -n mlflow
-kubectl port-forward -n mlflow pod/<MLFLOW_POD_NAME> 7004:5000
+kubectl get services -n mlflow
 ```
 
-Then open http://localhost:7004.
+If the Pod is not ready, inspect it:
+
+```bash
+kubectl describe pod <POD_NAME> -n mlflow
+kubectl logs <POD_NAME> -n mlflow
+```
+
+## Check port-forwarding
+
+Make sure the port-forward command is still running:
+
+```bash
+kubectl port-forward -n mlflow service/mlflow 5000:80
+```
+
+Then open http://localhost:5000 in your browser.
