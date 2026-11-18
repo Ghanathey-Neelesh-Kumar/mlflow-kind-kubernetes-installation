@@ -1,6 +1,6 @@
-# Example values for the Community Charts MLflow Helm chart.
-# Replace <RDS_ENDPOINT> and create the referenced Kubernetes Secret first.
-# Never commit real database credentials to this file.
+# Values for the Community Charts MLflow Helm chart.
+# Replace the endpoint and password with the values from your own RDS setup.
+# Do not commit the completed local file with real credentials.
 
 backendStore:
   databaseMigration: true
@@ -10,7 +10,5 @@ backendStore:
     host: "<RDS_ENDPOINT>"
     port: 5432
     database: "mlflow"
-  existingDatabaseSecret:
-    name: "mlflow-db-secret"
-    usernameKey: "username"
-    passwordKey: "password"
+    user: "mlflow_user"
+    password: "<YOUR_MLFLOW_PASSWORD>"
